@@ -1,0 +1,12 @@
+apiVersion: V1
+kind: Pod
+metadata:
+  name: mon_projet_ml
+version: 1.0
+description: Un projet de fin de cours.
+sec:
+  containers:
+    - name:
+      image: jenkins/jenkins:latest
+  -
+  
