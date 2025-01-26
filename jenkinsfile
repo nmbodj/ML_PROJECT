@@ -1,27 +1,115 @@
 pipeline {
     agent any
 
+    environment {
+        DOCKER_CONTEXT = 'desktop-linux'
+        PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
+        GIT_CREDENTIALS_ID = 'github-credentials'
+        REGISTRY = 'nmbodj'
+        FRONTEND_IMAGE = 'frontend'
+        BACKEND_IMAGE = 'backend'
+    }
+
     stages {
-        stage('Docker Version') {
+        stage('Set Docker Context') {
             steps {
-                bat 'docker --version'
+                script {
+                    sh 'docker context use ${DOCKER_CONTEXT}'
+                }
             }
         }
-        stage('Build Docker Image') {
+
+        stage('Clone Repository') {
             steps {
-                bat 'docker build -t uadb-dev:1.0 .'
+                script {
+                    checkout([$class: 'GitSCM',
+                        branches: [[name: 'main']],
+                        userRemoteConfigs: [[
+                            url: 'git@github.com:CarrickDev/ml_project.git',
+                            credentialsId: GIT_CREDENTIALS_ID
+                        ]]
+                    ])
+                }
             }
         }
-       
-         stage('Tag Docker Images') {
+
+        stage('Test Docker') {
             steps {
-                bat 'docker tag uadb-dev:1.0 bissimilahi/uadb-dev:1.0'
+                script {
+                    sh 'docker --version'
+                }
             }
         }
-         stage('Lister les images docker') {
+
+        stage('Build Backend Docker Image') {
             steps {
-                bat 'docker images'
+                script {
+                    sh 'docker build -t ${REGISTRY}/${BACKEND_IMAGE}:latest ./backend'
+                }
             }
+        }
+
+        stage('Build Frontend Docker Image') {
+            steps {
+                script {
+                    sh 'docker build -t ${REGISTRY}/${FRONTEND_IMAGE}:latest ./frontend'
+                }
+            }
+        }
+
+       stage('Push Docker Images to DockerHub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        sh 'docker context use desktop-linux'
+                        sh 'echo $DOCKER_PASSWORD | docker login -u $DOCKER_USER --password-stdin'
+                        sh 'docker push ${REGISTRY}/${BACKEND_IMAGE}:latest'
+                        sh 'docker push ${REGISTRY}/${FRONTEND_IMAGE}:latest'
+                    }
+                }
+            }
+}
+
+
+        stage('Apply Kubernetes Configurations') {
+            steps {
+                script {
+                    try {
+                        sh 'kubectl apply -f database/mysql-configmap.yml'
+                        sh 'kubectl apply -f backend/manifest/backend-configmap.yml'
+                        sh 'kubectl apply -f frontend/manifest/frontend-configmap.yml'
+                        sh 'kubectl apply -f database/mysql-secret.yml'
+                        sh 'kubectl apply -f database/mysql-pvc.yml'
+                    } catch (Exception e) {
+                        currentBuild.result = 'FAILURE'
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Applications to Kubernetes') {
+            steps {
+                script {
+                    sh 'kubectl apply -f namespace.yml'
+                    sh 'kubectl apply -f database/mysql-deployment.yml'
+                    sh 'kubectl apply -f backend/manifest/backend-deployment.yml'
+                    sh 'kubectl apply -f frontend/manifest/frontend-deployment.yml'
+                    sh 'kubectl apply -f database/mysql-service.yml'
+                    sh 'kubectl apply -f backend/manifest/backend-service.yml'
+                    sh 'kubectl apply -f frontend/manifest/frontend-service.yml'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Le pipeline CI/CD a été exécuté avec succès !'
+        }
+        failure {
+            echo 'Le pipeline CI/CD a échoué.'
         }
     }
 }
